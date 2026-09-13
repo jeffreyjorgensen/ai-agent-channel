@@ -1,0 +1,152 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-agent-channel"
+version = "0.2.0"
+description = "MCP server where agent sessions coordinate through a shared mailbox and a message can be an obligation that takes two parties to close"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+license-files = ["LICENSE"]
+authors = [{ name = "Jeffrey Jorgensen", email = "jeffrey@jeffreyjorgensen.dev" }]
+keywords = [
+    "mcp", "model-context-protocol", "agents", "multi-agent",
+    "coordination", "claude", "claude-code", "async",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Communications",
+]
+dependencies = [
+    # >=1.10: stateless_http + transport_security settings used by http.py.
+    # <2: mcp 2.0 removed `mcp.server.fastmcp`, which app.py imports. The
+    # upper bound is NOT optional caution — without it a rebuild silently
+    # picks up the next major and the container crash-loops on import, which
+    # is exactly how this bound came to be written.
+    "mcp>=1.10,<2",
+    # Python does not use the system trust store: without a findable CA
+    # bundle every HTTPS call from ai-agent-channel-status fails on macOS
+    # while curl to the same URL succeeds.
+    "certifi",
+]
+
+[project.urls]
+Homepage = "https://github.com/jeffreyjorgensen/ai-agent-channel"
+Source = "https://github.com/jeffreyjorgensen/ai-agent-channel"
+Issues = "https://github.com/jeffreyjorgensen/ai-agent-channel/issues"
+Documentation = "https://github.com/jeffreyjorgensen/ai-agent-channel/blob/main/PROTOCOL.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5",
+    "pytest-timeout>=2.3",
+]
+lint = [
+    # exact pins: a new rule or check must not fail CI on an unchanged tree
+    "ruff==0.16.7",
+    "basedpyright==1.40.1",
+]
+
+[project.scripts]
+ai-agent-channel = "ai_agent_channel.__main__:main"
+ai-agent-channel-session-hook = "ai_agent_channel.hooks:session_start_hook"
+ai-agent-channel-stop-hook = "ai_agent_channel.hooks:stop_hook"
+ai-agent-channel-status = "ai_agent_channel.cli:main"
+
+# An ALLOW list, not a deny list. The sdist previously picked up
+# .claude/settings.local.json — a file this repository never tracked, hidden
+# from git only by the machine's global ignore file, which a build backend
+# does not read. Naming what ships cannot fail that way; naming what does not
+# fails silently, once, on someone else's machine.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/docs",
+    "/deploy",
+    "/.github",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/PROTOCOL.md",
+    "/AGENTS.md",
+    "/CONTRIBUTING.md",
+    "/SECURITY.md",
+    "/LICENSE",
+    "/.gitignore",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_agent_channel"]
+
+[tool.hatch.build.targets.wheel.force-include]
+# get_protocol()/get_charter_template() serve these to connected agents;
+# the files in the repo stay the source of truth
+"PROTOCOL.md" = "ai_agent_channel/PROTOCOL.md"
+"docs/charter-template.md" = "ai_agent_channel/charter-template.md"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# importlib: `pytest` and `python -m pytest` import the suite identically, and
+# no test module can reach into another. Shared helpers are importable as
+# `helpers` from tests/ ("src" keeps a non-installed checkout working).
+addopts = "--import-mode=importlib --strict-markers"
+pythonpath = ["src", "tests"]
+# a hung long poll or server thread fails one test instead of the whole job
+timeout = 60
+# undeclared markers are typos, not tests that silently stop being selected
+markers = [
+    "requirement(id): the requirement point (e.g. 'T-21') an acceptance test in tests/acceptance/ checks",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.format]
+# Python fences in the Markdown docs are illustrative calls (hand-aligned
+# comments, JSON-style `true`), not code the formatter should own
+exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "ASYNC", "S", "RUF"]
+# the formatter owns line length; long SQL and message strings stay whole
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# SQL is assembled from module constants only; values always go through ?
+"src/ai_agent_channel/{auth,db,server}.py" = ["S608"]
+"src/ai_agent_channel/db/*.py" = ["S608"]
+# tests: asserts, fixture secrets, subprocess and sync httpx against a
+# threaded server are all intended
+"tests/**" = ["S101", "S104", "S105", "S106", "S108", "S311", "S603", "S607", "ASYNC"]
+# names of environment variables (…_TOKEN_ENV) and public token prefixes
+# ("cct_"), not secrets; the actual tokens are generated and stored hashed
+"src/ai_agent_channel/{auth,client,http}.py" = ["S105"]
+
+[tool.basedpyright]
+include = ["src", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+
+# tests are checked in the same mode as src. Their environment only adds the
+# import roots pytest's `pythonpath` gives them (`helpers` from tests/). Tool
+# answers are JSON and stay Any; None lookups go through helpers.present(),
+# and mcp's private state is reached only from helpers.py.
+[[tool.basedpyright.executionEnvironments]]
+root = "tests"
+extraPaths = ["src", "tests"]

@@ -1,0 +1,41 @@
+# For a server where an existing nginx (behind Cloudflare) already holds
+# 80/443: the channel is one container with NO public ports, and nginx
+# reaches it by name over a shared docker network. TLS stays on nginx; the
+# Caddy from docker-compose.yml is not needed here.
+#
+#   cp .env.example .env   # only AI_AGENT_CHANNEL_ADMIN_TOKEN; no domain needed
+#   docker compose -f docker-compose.vps.yml up -d --build
+#
+# A vhost connects it from outside (example: deploy/nginx-channel.conf):
+#   proxy_pass http://ai-agent-channel:8765;
+services:
+  channel:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: ai-agent-channel
+    restart: unless-stopped
+    environment:
+      AI_AGENT_CHANNEL_ADMIN_TOKEN: ${AI_AGENT_CHANNEL_ADMIN_TOKEN:?set it in .env}
+      # Optional (see .env.example). Empty keeps the Host check off; set it
+      # to the public hostname, plus 127.0.0.1:* for the debug port below.
+      AI_AGENT_CHANNEL_ALLOWED_HOSTS: ${AI_AGENT_CHANNEL_ALLOWED_HOSTS:-}
+      # Optional as well; empty means the built-in default. Listed so a value
+      # set in .env actually reaches the server.
+      AI_AGENT_CHANNEL_VIEW_KEY_TTL_DAYS: ${AI_AGENT_CHANNEL_VIEW_KEY_TTL_DAYS:-}
+      AI_AGENT_CHANNEL_TRUST_PROXY: ${AI_AGENT_CHANNEL_TRUST_PROXY:-}
+      AI_AGENT_CHANNEL_STATUS_MAX_WAITERS: ${AI_AGENT_CHANNEL_STATUS_MAX_WAITERS:-}
+      AI_AGENT_CHANNEL_STATUS_MAX_WAITERS_PER_TOKEN: ${AI_AGENT_CHANNEL_STATUS_MAX_WAITERS_PER_TOKEN:-}
+    volumes:
+      - channel-data:/data
+    ports:
+      - "127.0.0.1:8765:8765"   # for local debugging from the host only
+    networks:
+      - infra_net
+
+volumes:
+  channel-data:
+
+networks:
+  infra_net:
+    external: true

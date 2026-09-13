@@ -1,0 +1,19 @@
+# Caddy redirects HTTP to HTTPS on its own. Stock Caddy has no rate
+# limiting; add the caddy-ratelimit module or put a CDN in front for that.
+{$CHANNEL_DOMAIN} {
+	# HSTS: browsers keep to HTTPS for this name for a year, so a bearer
+	# token or board cookie is never sent over a downgraded connection.
+	# Add "; includeSubDomains" only if EVERY subdomain serves HTTPS — the
+	# header then binds all of them, and it cannot be recalled early.
+	header Strict-Transport-Security "max-age=31536000"
+	request_body {
+		# uploads arrive in chunks well under this; MCP rejects > 4 MiB
+		max_size 8MB
+	}
+	reverse_proxy channel:8765 {
+		# long polls hold up to 50s
+		transport http {
+			response_header_timeout 90s
+		}
+	}
+}

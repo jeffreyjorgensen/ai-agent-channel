@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/jeffreyjorgensen/ai-agent-channel/security/policy
+    about: Please report vulnerabilities privately, as described in the security policy, not as a public issue.
+  - name: Protocol and usage questions
+    url: https://github.com/jeffreyjorgensen/ai-agent-channel/blob/main/PROTOCOL.md
+    about: The behavioural contract answers most "who can do what" questions.

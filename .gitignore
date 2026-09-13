@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.idea/
+*.egg-info/
+deploy/.env
+.DS_Store
+
+# local working notes: kept on disk, never part of the published project
+docs/feedback/
+TASK-*.md
+
+# local agent/tool settings — machine-specific, never part of the project
+.claude/settings.local.json
+
+# build artefacts, coverage output and stray channel databases
+build/
+dist/
+*.db
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

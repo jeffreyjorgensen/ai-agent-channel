@@ -1,0 +1,44 @@
+# Remote ai-agent-channel on a VPS: the channel server behind Caddy (automatic
+# Let's Encrypt TLS). Copy .env.example to .env, set CHANNEL_DOMAIN and
+# AI_AGENT_CHANNEL_ADMIN_TOKEN, point the domain's DNS at the VPS, then:
+#
+#   docker compose up -d --build
+#
+# Clients connect to https://$CHANNEL_DOMAIN/mcp with a bearer token.
+services:
+  channel:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    environment:
+      AI_AGENT_CHANNEL_ADMIN_TOKEN: ${AI_AGENT_CHANNEL_ADMIN_TOKEN:?set it in .env}
+      # DNS-rebinding protection: answer only to the public hostname
+      AI_AGENT_CHANNEL_ALLOWED_HOSTS: ${AI_AGENT_CHANNEL_ALLOWED_HOSTS:-${CHANNEL_DOMAIN}}
+      # Optional (see .env.example). Listed so a value set in .env actually
+      # reaches the server; empty means the built-in default.
+      AI_AGENT_CHANNEL_VIEW_KEY_TTL_DAYS: ${AI_AGENT_CHANNEL_VIEW_KEY_TTL_DAYS:-}
+      AI_AGENT_CHANNEL_TRUST_PROXY: ${AI_AGENT_CHANNEL_TRUST_PROXY:-}
+      AI_AGENT_CHANNEL_STATUS_MAX_WAITERS: ${AI_AGENT_CHANNEL_STATUS_MAX_WAITERS:-}
+      AI_AGENT_CHANNEL_STATUS_MAX_WAITERS_PER_TOKEN: ${AI_AGENT_CHANNEL_STATUS_MAX_WAITERS_PER_TOKEN:-}
+    volumes:
+      - channel-data:/data
+    # not exposed to the host — only Caddy reaches it on the compose network
+
+  caddy:
+    image: caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CHANNEL_DOMAIN: ${CHANNEL_DOMAIN:?set it in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  channel-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,224 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # weekly, against the newest dependencies the constraints allow (latest-deps)
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same pull request makes the older run moot.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Actions are pinned to commit SHAs (a tag can be moved; a SHA cannot).
+# To bump: git ls-remote https://github.com/actions/checkout refs/tags/vX.Y.Z
+# uv is pinned to the version the Dockerfile's uv image uses; bump both.
+env:
+  UV_VERSION: "0.11.14"
+
+jobs:
+  pytest:
+    if: github.event_name != 'schedule'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: macos-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.14"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      # exactly the versions in uv.lock; a stale lockfile fails here
+      - run: uv sync --locked --extra dev
+
+      # test_http.py starts a real uvicorn and speaks MCP over streamable
+      # HTTP to it, so the suite covers the hosted transport, not only the
+      # database layer. It needs no services and no network.
+      - run: uv run --no-sync pytest -q --cov=ai_agent_channel --cov-branch --cov-report=term-missing --cov-fail-under=95
+
+  # Test order must not matter: a test that passes only after another one
+  # has left state behind is a test of the order.
+  pytest-random-order:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked --extra dev
+      # the seed is printed in the header; rerun with -p randomly --randomly-seed=<n>
+      - run: uv run --with pytest-randomly pytest -q
+
+  # The lockfile keeps CI reproducible, which also hides the day a new
+  # release of a dependency breaks us. This job upgrades everything the
+  # constraints in pyproject.toml allow and runs the suite, so that day shows
+  # up here first. It never commits the upgraded lockfile.
+  latest-deps:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
+      - run: uv lock --upgrade
+      - run: git diff --stat -- uv.lock
+      - run: uv sync --extra dev
+      - run: uv run --no-sync pytest -q
+
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      # only ruff, at the version uv.lock pins for the lint extra — not the
+      # whole project and its dependencies
+      - name: ruff
+        run: |
+          ruff=$(uv export --locked --extra lint --no-hashes --no-header --no-annotate | grep -E '^ruff==')
+          echo "using $ruff"
+          uvx --from "$ruff" ruff check .
+          uvx --from "$ruff" ruff format --check .
+
+  typecheck:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked --extra dev --extra lint
+      # what is checked is [tool.basedpyright] include in pyproject.toml:
+      # src and tests (tests through their own executionEnvironment)
+      - run: uv run --no-sync basedpyright
+
+  # What ships is decided by allow-lists in pyproject.toml; this checks the
+  # built artefacts against them, so a regression shows up here and not on
+  # someone's machine after a release.
+  packaging:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+      - run: uv build
+      - run: |
+          uv run --no-project python - <<'PY'
+          import glob, sys, tarfile, zipfile
+          (wheel,) = glob.glob("dist/*.whl")
+          (sdist,) = glob.glob("dist/*.tar.gz")
+          names = set(zipfile.ZipFile(wheel).namelist())
+          required = ["ai_agent_channel/PROTOCOL.md", "ai_agent_channel/charter-template.md"]
+          missing = [n for n in required if n not in names]
+          leaked = [
+              n for n in tarfile.open(sdist).getnames()
+              if "/.claude/" in n or n.endswith("/.claude")
+              or "/docs/feedback/" in n
+              or (n.rsplit("/", 1)[-1].startswith("TASK-") and n.endswith(".md"))
+          ]
+          print("wheel missing:", missing or "nothing")
+          print("sdist leaks:", leaked or "nothing")
+          sys.exit(1 if missing or leaked else 0)
+          PY
+      # The built wheel, installed alone into a fresh environment (outside
+      # the checkout, so nothing is imported from src/): the entry points
+      # exist and the server module imports with only the declared
+      # dependencies, at the locked versions.
+      - name: install the wheel into a fresh venv
+        run: |
+          uv export --locked --no-dev --no-hashes --no-emit-project > "$RUNNER_TEMP/constraints.txt"
+          uv venv "$RUNNER_TEMP/wheel-env" --python 3.12
+          uv pip install --python "$RUNNER_TEMP/wheel-env/bin/python" \
+            --constraint "$RUNNER_TEMP/constraints.txt" dist/*.whl
+      - name: smoke-test the installed wheel
+        working-directory: ${{ runner.temp }}
+        run: |
+          wheel-env/bin/ai-agent-channel --help
+          wheel-env/bin/ai-agent-channel-status --help
+          wheel-env/bin/python -c "from ai_agent_channel.server import mcp; print(mcp.name)"
+
+  # The image the deployments build: it must build from a clean checkout,
+  # start with nothing but an admin token, answer /healthz, and report
+  # itself healthy through its own HEALTHCHECK.
+  docker:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - run: docker build -f deploy/Dockerfile -t ai-agent-channel:ci .
+      - name: start the container and wait for /healthz
+        run: |
+          docker run -d --name channel -p 127.0.0.1:8765:8765 \
+            -e AI_AGENT_CHANNEL_ADMIN_TOKEN="cca_$(openssl rand -hex 24)" \
+            ai-agent-channel:ci
+          ok=""
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8765/healthz; then ok=1; break; fi
+            sleep 1
+          done
+          docker logs channel
+          test -n "$ok"
+      - name: wait for the image's own HEALTHCHECK
+        run: |
+          status=""
+          for _ in $(seq 1 45); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' channel)
+            [ "$status" = healthy ] && break
+            sleep 2
+          done
+          echo "health: $status"
+          test "$status" = healthy
+      - if: always()
+        run: docker rm -f channel || true
